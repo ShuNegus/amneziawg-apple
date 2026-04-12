@@ -25,9 +25,10 @@ import (
 )
 
 var (
-	proxyMu     sync.Mutex
-	proxyCancel context.CancelFunc
-	proxyReady  chan struct{}
+	proxyMu       sync.Mutex
+	proxyCancel   context.CancelFunc
+	proxyReady    chan struct{}
+	proxyWGConfig chan string
 
 	proxyLoggerCtx unsafe.Pointer
 	proxyLoggerFn  C.proxy_logger_fn
@@ -173,6 +174,22 @@ func ProxyWaitReady(timeoutMs C.int) C.int {
 	}
 }
 
+//export ProxyGetWGConfig
+func ProxyGetWGConfig(timeoutMs C.int) *C.char {
+	if proxyWGConfig == nil {
+		return nil
+	}
+
+	select {
+	case config := <-proxyWGConfig:
+		return C.CString(config)
+	case <-proxyCtx.Done():
+		return nil
+	case <-time.After(time.Duration(timeoutMs) * time.Millisecond):
+		return nil
+	}
+}
+
 type proxyConfig struct {
 	vkLink      string
 	vkLink2     string
@@ -262,6 +279,24 @@ func runProxy(ctx context.Context, cfg proxyConfig) {
 		})
 	}
 
+	// Канал для получения WG конфига от сервера
+	configCh := make(chan string, 1)
+	proxyWGConfig = make(chan string, 1)
+	go func() {
+		select {
+		case conf := <-configCh:
+			if conf != "" {
+				// Добавляем MTU если нет
+				if !strings.Contains(conf, "MTU =") {
+					conf = strings.Replace(conf, "[Interface]", "[Interface]\nMTU = 1280", 1)
+				}
+				proxyWGConfig <- conf
+				proxyLog(0, "[ПРОКСИ] WG конфиг получен от сервера ✓")
+			}
+		case <-ctx.Done():
+		}
+	}()
+
 	var wg sync.WaitGroup
 	workerIDCounter := 1
 	var prevWaitReady <-chan struct{}
@@ -300,12 +335,18 @@ func runProxy(ctx context.Context, cfg proxyConfig) {
 
 		cycle := time.Duration(defaultCycleSecs) * time.Second
 
+		isFirst := (g == 0)
+		var cc chan<- string
+		if isFirst && cfg.password != "" {
+			cc = configCh
+		}
+
 		wg.Add(1)
-		go func(groupID, hashIdx int, workerIds []int, waitR <-chan struct{}, sigR chan<- struct{}) {
+		go func(groupID, hashIdx int, workerIds []int, waitR <-chan struct{}, sigR chan<- struct{}, getConf bool, confCh chan<- string) {
 			defer wg.Done()
 			WorkerGroup(ctx, groupID, hashIdx, tp, peer, disp, localPort, useUDP,
-				false, nil, workerIds, cycle, &pauseFlag, cfg.deviceID, cfg.password, stats, waitR, sigR)
-		}(g+1, g, ids, myWaitReady, mySignalReady)
+				getConf, confCh, workerIds, cycle, &pauseFlag, cfg.deviceID, cfg.password, stats, waitR, sigR)
+		}(g+1, g, ids, myWaitReady, mySignalReady, isFirst, cc)
 	}
 
 	wg.Wait()
