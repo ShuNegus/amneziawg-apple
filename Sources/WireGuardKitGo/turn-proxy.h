@@ -16,6 +16,7 @@ typedef struct {
     const char *sni;
     const char *password;
     const char *deviceID;
+    const char *captchaMode;
 } ProxyConfig;
 
 /* Exported functions declared in CGO-generated header */

@@ -130,6 +130,7 @@ func ProxyStart(cfg *C.ProxyConfig) {
 	sni := C.GoString(cfg.sni)
 	password := C.GoString(cfg.password)
 	deviceID := C.GoString(cfg.deviceID)
+	captchaModeStr := C.GoString(cfg.captchaMode)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	proxyCancel = cancel
@@ -145,6 +146,7 @@ func ProxyStart(cfg *C.ProxyConfig) {
 		sni:         sni,
 		password:    password,
 		deviceID:    deviceID,
+		captchaMode: captchaModeStr,
 	})
 }
 
@@ -199,6 +201,7 @@ type proxyConfig struct {
 	sni         string
 	password    string
 	deviceID    string
+	captchaMode string
 }
 
 func runProxy(ctx context.Context, cfg proxyConfig) {
@@ -219,7 +222,11 @@ func runProxy(ctx context.Context, cfg proxyConfig) {
 		return
 	}
 
-	captchaMode.Store("wv")
+	if cfg.captchaMode != "" {
+		captchaMode.Store(cfg.captchaMode)
+	} else {
+		captchaMode.Store("wv")
+	}
 	SetUserAgent("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148")
 
 	tp := &TurnParams{
