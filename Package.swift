@@ -30,16 +30,23 @@ let package = Package(
                 "goruntime-boottime-over-monotonic.diff",
                 "go.mod",
                 "go.sum",
+                "Makefile",
                 "api-apple.go",
-                "api-xray.go",
-                "Makefile"
+                "turn-proxy-api.go",
+                "turn-proxy.h",
+                "turn-proxy-botgen.go",
+                "turn-proxy-captcha-slider.go",
+                "turn-proxy-creds.go",
+                "turn-proxy-dispatcher.go",
+                "turn-proxy-globals.go",
+                "turn-proxy-group.go",
+                "turn-proxy-namegen.go",
+                "turn-proxy-protocol.go",
+                "turn-proxy-session.go",
+                "turn-proxy-split.go",
+                "turn-proxy-stats.go",
             ],
-            publicHeadersPath: ".",
-            linkerSettings: [
-                .unsafeFlags(["-L", "Sources/WireGuardKitGo/out"]),
-                .linkedLibrary("wg-go"),
-                .linkedLibrary("resolv")
-            ]
+            publicHeadersPath: "."
         ),
         .testTarget(
             name: "WireGuardKitTests",

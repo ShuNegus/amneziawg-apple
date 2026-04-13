@@ -14,16 +14,12 @@ import (
 	"net"
 	"net/http"
 	neturl "net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	fhttp "github.com/bogdanfinn/fhttp"
-	tlsclient "github.com/bogdanfinn/tls-client"
-	"github.com/bogdanfinn/tls-client/profiles"
 	"github.com/google/uuid"
 )
 
@@ -190,12 +186,9 @@ func solveVkCaptcha(ctx context.Context, captchaErr *vkCaptchaError, profile Bot
 }
 
 func getCaptchaMode() string {
-	return os.Getenv("WDTT_CAPTCHA_MODE")
+	return captchaMode.Load().(string)
 }
 
-func SetCaptchaModeEnv(mode string) {
-	os.Setenv("WDTT_CAPTCHA_MODE", mode)
-}
 
 var captchaWVSem = make(chan struct{}, 1)
 
@@ -206,34 +199,23 @@ func solveVkCaptchaViaWV(ctx context.Context, captchaErr *vkCaptchaError) (strin
 		return "", fmt.Errorf("отмена во время ожидания очереди капчи: %w", ctx.Err())
 	}
 	defer func() {
-		// Даем Kotlin гарантированную секунду на очистку Mutex и WebView
 		time.Sleep(1 * time.Second)
 		<-captchaWVSem
 	}()
 
 	log.Printf("[КАПЧА] WV: Запрос отправлен")
 
-	drainCaptchaResult()
-
-	fmt.Printf("CAPTCHA_SOLVE|%s|%s\n", captchaErr.RedirectUri, captchaErr.SessionToken)
-	os.Stdout.Sync()
-
-	select {
-	case result := <-CaptchaResultCh:
-		if strings.HasPrefix(result, "error:") {
-			errMsg := strings.TrimPrefix(result, "error:")
-			if !strings.Contains(errMsg, "tunnel stopped") {
-				log.Printf("[КАПЧА] WV: Ошибка — %s", errMsg)
-			}
-			return "", fmt.Errorf("WV captcha error: %s", errMsg)
-		}
-		log.Printf("[КАПЧА] WV: Токен получен ✓")
-		return result, nil
-	case <-ctx.Done():
-		return "", fmt.Errorf("отмена контекста во время ожидания капчи: %w", ctx.Err())
-	case <-time.After(300 * time.Second):
-		return "", fmt.Errorf("таймаут решения капчи через WV (5мин)")
+	result := requestCaptcha(captchaErr.RedirectUri, captchaErr.SessionToken)
+	if result == "" {
+		return "", fmt.Errorf("таймаут решения капчи через WV")
 	}
+	if strings.HasPrefix(result, "error:") {
+		errMsg := strings.TrimPrefix(result, "error:")
+		log.Printf("[КАПЧА] WV: Ошибка — %s", errMsg)
+		return "", fmt.Errorf("WV captcha error: %s", errMsg)
+	}
+	log.Printf("[КАПЧА] WV: Токен получен ✓")
+	return result, nil
 }
 
 func truncateStr(s string, maxLen int) string {
@@ -244,16 +226,9 @@ func truncateStr(s string, maxLen int) string {
 }
 
 func solveVkCaptchaViaRJS(ctx context.Context, captchaErr *vkCaptchaError, profile BotProfile) (string, error) {
-	// Create a tls-client instance to match the slider POC requirements
-	tlsClient, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
-		tlsclient.WithTimeoutSeconds(20),
-		tlsclient.WithClientProfile(profiles.Chrome_120),
-	)
-	if err != nil {
-		return "", fmt.Errorf("не удалось создать tls-client: %w", err)
-	}
+	httpClient := &http.Client{Timeout: 20 * time.Second, Transport: getSharedTransport()}
 
-	bootstrap, err := fetchPowInput(ctx, captchaErr.RedirectUri, tlsClient, profile.UserAgent)
+	bootstrap, err := fetchPowInput(ctx, captchaErr.RedirectUri, httpClient, profile.UserAgent)
 	if err != nil {
 		return "", fmt.Errorf("не удалось загрузить captcha settings: %w", err)
 	}
@@ -280,8 +255,8 @@ func solveVkCaptchaViaRJS(ctx context.Context, captchaErr *vkCaptchaError, profi
 	return "", err
 }
 
-func fetchPowInput(ctx context.Context, redirectUri string, client tlsclient.HttpClient, userAgent string) (*captchaBootstrap, error) {
-	req, err := fhttp.NewRequestWithContext(ctx, "GET", redirectUri, nil)
+func fetchPowInput(ctx context.Context, redirectUri string, client *http.Client, userAgent string) (*captchaBootstrap, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", redirectUri, nil)
 	if err != nil {
 		return nil, err
 	}
