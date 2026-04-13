@@ -57,7 +57,6 @@ func proxyLog(level int, format string, args ...interface{}) {
 		C.callProxyLoggerFn(proxyLoggerFn, proxyLoggerCtx, C.int(level), cmsg)
 		C.free(unsafe.Pointer(cmsg))
 	}
-	log.Print(msg)
 }
 
 func requestCaptcha(url, sessionToken string) string {
