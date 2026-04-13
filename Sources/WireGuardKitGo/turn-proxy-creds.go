@@ -20,6 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	fhttp "github.com/bogdanfinn/fhttp"
+	tlsclient "github.com/bogdanfinn/tls-client"
+	"github.com/bogdanfinn/tls-client/profiles"
 	"github.com/google/uuid"
 )
 
@@ -189,7 +192,6 @@ func getCaptchaMode() string {
 	return captchaMode.Load().(string)
 }
 
-
 var captchaWVSem = make(chan struct{}, 1)
 
 func solveVkCaptchaViaWV(ctx context.Context, captchaErr *vkCaptchaError) (string, error) {
@@ -226,9 +228,16 @@ func truncateStr(s string, maxLen int) string {
 }
 
 func solveVkCaptchaViaRJS(ctx context.Context, captchaErr *vkCaptchaError, profile BotProfile) (string, error) {
-	httpClient := &http.Client{Timeout: 20 * time.Second, Transport: getSharedTransport()}
+	// Create a tls-client instance to match the slider POC requirements
+	tlsClient, err := tlsclient.NewHttpClient(tlsclient.NewNoopLogger(),
+		tlsclient.WithTimeoutSeconds(20),
+		tlsclient.WithClientProfile(profiles.Chrome_120),
+	)
+	if err != nil {
+		return "", fmt.Errorf("не удалось создать tls-client: %w", err)
+	}
 
-	bootstrap, err := fetchPowInput(ctx, captchaErr.RedirectUri, httpClient, profile.UserAgent)
+	bootstrap, err := fetchPowInput(ctx, captchaErr.RedirectUri, tlsClient, profile.UserAgent)
 	if err != nil {
 		return "", fmt.Errorf("не удалось загрузить captcha settings: %w", err)
 	}
@@ -245,18 +254,19 @@ func solveVkCaptchaViaRJS(ctx context.Context, captchaErr *vkCaptchaError, profi
 	hash := solvePoW(bootstrap.PowInput, bootstrap.Difficulty)
 	time.Sleep(time.Duration(timing.FetchPowMs) * time.Millisecond)
 
-	log.Printf("[КАПЧА RJS] Отправка captchaNotRobot...")
-	successToken, err := callCaptchaNotRobot(ctx, captchaErr.SessionToken, hash, profile, captchaRng)
+	// Используем эвристику pixelDiff (5/5 точность)
+	successToken, err := callCaptchaNotRobotWithSliderPOC(ctx, captchaErr.SessionToken, hash, 5, tlsClient, profile, bootstrap.Settings)
+	
 	if err == nil && successToken != "" {
-		log.Printf("[КАПЧА RJS] Решено успешно ✓")
+		log.Printf("[КАПЧА RJS] Слайдер решен успешно ✓")
 		return successToken, nil
 	}
 
 	return "", err
 }
 
-func fetchPowInput(ctx context.Context, redirectUri string, client *http.Client, userAgent string) (*captchaBootstrap, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", redirectUri, nil)
+func fetchPowInput(ctx context.Context, redirectUri string, client tlsclient.HttpClient, userAgent string) (*captchaBootstrap, error) {
+	req, err := fhttp.NewRequestWithContext(ctx, "GET", redirectUri, nil)
 	if err != nil {
 		return nil, err
 	}

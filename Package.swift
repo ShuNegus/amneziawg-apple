@@ -32,6 +32,7 @@ let package = Package(
                 "go.sum",
                 "Makefile",
                 "api-apple.go",
+                "api-xray.go",
                 "turn-proxy-api.go",
                 "turn-proxy.h",
                 "turn-proxy-botgen.go",
