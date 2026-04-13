@@ -20,6 +20,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -29,6 +30,7 @@ var (
 	proxyCancel   context.CancelFunc
 	proxyReady    chan struct{}
 	proxyWGConfig chan string
+	proxyStats    *Stats
 
 	proxyLoggerCtx unsafe.Pointer
 	proxyLoggerFn  C.proxy_logger_fn
@@ -191,6 +193,16 @@ func ProxyGetWGConfig(timeoutMs C.int) *C.char {
 	}
 }
 
+//export ProxyGetStats
+func ProxyGetStats(outActive *C.int, outBytesUp *C.long, outBytesDown *C.long) {
+	if proxyStats == nil {
+		return
+	}
+	*outActive = C.int(atomic.LoadInt32(&proxyStats.ActiveConnections))
+	*outBytesUp = C.long(atomic.LoadInt64(&proxyStats.TotalBytesUp))
+	*outBytesDown = C.long(atomic.LoadInt64(&proxyStats.TotalBytesDown))
+}
+
 type proxyConfig struct {
 	vkLink      string
 	vkLink2     string
@@ -267,6 +279,7 @@ func runProxy(ctx context.Context, cfg proxyConfig) {
 		numWorkers, numGroups, cfg.listenAddr, cfg.peerAddr)
 
 	stats := NewStats()
+	proxyStats = stats
 	shutdownCh := make(chan struct{})
 	go func() {
 		<-ctx.Done()
